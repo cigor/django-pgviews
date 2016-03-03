@@ -9,6 +9,7 @@ from django.core import exceptions
 from django.db import connection, transaction
 from django.db.models.query import QuerySet
 from django.db import models
+from django.apps import apps
 import psycopg2
 
 from django_pgviews.db import get_fields_by_name
@@ -32,7 +33,7 @@ def hasfield(model_cls, field_name):
         False
     """
     try:
-        model_cls._meta.get_field_by_name(field_name)
+        model_cls._meta.get_field(field_name)
         return True
     except models.FieldDoesNotExist:
         return False
@@ -57,27 +58,6 @@ def realize_deferred_projections(sender, *args, **kwargs):
                 continue
             copy.copy(field).contribute_to_class(view_cls, name)
 models.signals.class_prepared.connect(realize_deferred_projections)
-
-
-def create_views(models_module, update=True, force=False):
-    """Create the database views for a given models module.
-    """
-    for name, view_cls in vars(models_module).items():
-        if not (isinstance(view_cls, type) and
-                issubclass(view_cls, View) and
-                hasattr(view_cls, 'sql')):
-            continue
-
-        try:
-            created = create_view(connection, view_cls._meta.db_table,
-                                  view_cls.sql, update=update, force=force,
-                                  materialized=isinstance(view_cls(), MaterializedView))
-        except Exception, exc:
-            exc.view_cls = view_cls
-            exc.python_name = models_module.__name__ + '.' + name
-            raise
-        else:
-            yield created, view_cls, models_module.__name__ + '.' + name
 
 
 def create_view(connection, view_name, view_query, update=True, force=False,
@@ -134,26 +114,6 @@ def create_view(connection, view_name, view_query, update=True, force=False,
         cursor_wrapper.close()
 
 
-def clear_views(models_module):
-    """Remove the database views for a given models_module."""
-    for name, view_cls in vars(models_module).iteritems():
-        if not (isinstance(view_cls, type) and
-                issubclass(view_cls, View) and
-                hasattr(view_cls, 'sql')):
-            continue
-
-        try:
-            cleared = clear_view(
-                connection, view_cls._meta.db_table,
-                materialized=isinstance(view_cls(), MaterializedView))
-        except Exception, exc:
-            exc.view_cls = view_cls
-            exc.python_name = models_module.__name__ + '.' + name
-            raise
-        else:
-            yield cleared, view_cls, models_module.__name__ + '.' + name
-
-
 def clear_view(connection, view_name, materialized=False):
     """
     Remove a named view on connection.
@@ -177,7 +137,13 @@ class View(models.Model):
     class ViewMeta(models.base.ModelBase):
 
         def __new__(metacls, name, bases, attrs):
+            '''Deal with all of the meta attributes, removing any Django does not want
+            '''
+            # Get attributes before Django
+            dependencies = attrs.pop('dependencies', [])
             projection = attrs.pop('projection', [])
+
+            # Get projection
             deferred_projections = []
             for field_name in projection:
                 if isinstance(field_name, models.Field):
@@ -192,7 +158,10 @@ class View(models.Model):
                     raise TypeError("Unrecognized field specifier: %r" %
                                     field_name)
             view_cls = models.base.ModelBase.__new__(metacls, name, bases,
-                                                     attrs)
+                                attrs)
+
+            # Get dependencies
+            setattr(view_cls, '_dependencies', dependencies)
             for app_label, model_name, field_name in deferred_projections:
                 model_spec = (app_label, model_name.lower())
 
@@ -200,8 +169,6 @@ class View(models.Model):
                 _realise_projections(app_label, model_name)
 
             return view_cls
-
-
 
     __metaclass__ = ViewMeta
 
@@ -215,7 +182,7 @@ def _realise_projections(app_label, model_name):
     realise_deferred_projections() if it has.
     """
     try:
-        model_cls = models.get_model(app_label, model_name)
+        model_cls = apps.get_model(app_label, model_name)
     except exceptions.AppRegistryNotReady:
         return
     if model_cls is not None:
@@ -224,7 +191,7 @@ def _realise_projections(app_label, model_name):
 
 class ReadOnlyViewQuerySet(QuerySet):
     def _raw_delete(self, *args, **kwargs):
-        pass
+        return 0
 
     def delete(self):
         raise NotImplementedError("Not allowed")

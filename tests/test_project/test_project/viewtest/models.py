@@ -1,6 +1,6 @@
 from django.db import models
 
-import django_pgviews
+from django_pgviews import view as django_pgviews
 
 
 class TestModel(models.Model):
@@ -11,6 +11,7 @@ class TestModel(models.Model):
 
 class Superusers(django_pgviews.View):
     projection = ['auth.User.*']
+    dependencies = ('viewtest.RelatedView',)
     sql = """SELECT * FROM auth_user WHERE is_superuser = TRUE;"""
 
 
