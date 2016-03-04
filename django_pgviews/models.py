@@ -23,15 +23,16 @@ class ViewSyncer(object):
             loop += 1
             backlog = self.run_backlog(backlog, force, update)
 
-        if loop >= 10:
+        if loop >= 30:
             log.warn('pgviews dependencies hit limit. Check if your model dependencies are correct')
+            print(backlog)
 
     def run_backlog(self, models, force, update):
         '''Installs the list of models given from the previous backlog
-        
+
         If the correct dependent views have not been installed, the view
         will be added to the backlog.
-        
+
         Eventually we get to a point where all dependencies are sorted.
         '''
         backlog = []
@@ -51,7 +52,7 @@ class ViewSyncer(object):
                         view_cls.sql, update=update, force=force,
                         materialized=isinstance(view_cls(), MaterializedView))
                 self.synced.append(name)
-            except Exception, exc:
+            except Exception as  exc:
                 exc.view_cls = view_cls
                 exc.python_name = name
                 raise

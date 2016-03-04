@@ -49,9 +49,9 @@ def realize_deferred_projections(sender, *args, **kwargs):
     app_label = sender._meta.app_label
     model_name = sender.__name__.lower()
     pending = _DEFERRED_PROJECTIONS.pop((app_label, model_name), {})
-    for view_cls, field_names in pending.iteritems():
+    for view_cls, field_names in pending.items():
         field_instances = get_fields_by_name(sender, *field_names)
-        for name, field in field_instances.iteritems():
+        for name, field in field_instances.items():
             # Only assign the field if the view does not already have an
             # attribute or explicitly-defined field with that name.
             if hasattr(view_cls, name) or hasfield(view_cls, name):
@@ -130,45 +130,45 @@ def clear_view(connection, view_name, materialized=False):
     return u'DROPPED'.format(view=view_name)
 
 
-class View(models.Model):
+class ViewMeta(models.base.ModelBase):
+
+    def __new__(metacls, name, bases, attrs):
+        '''Deal with all of the meta attributes, removing any Django does not want
+        '''
+        # Get attributes before Django
+        dependencies = attrs.pop('dependencies', [])
+        projection = attrs.pop('projection', [])
+
+        # Get projection
+        deferred_projections = []
+        for field_name in projection:
+            if isinstance(field_name, models.Field):
+                attrs[field_name.name] = copy.copy(field_name)
+            elif isinstance(field_name, str):
+                match = FIELD_SPEC_RE.match(field_name)
+                if not match:
+                    raise TypeError("Unrecognized field specifier: %r" %
+                                    field_name)
+                deferred_projections.append(match.groups())
+            else:
+                raise TypeError("Unrecognized field specifier: %r" %
+                                field_name)
+        view_cls = models.base.ModelBase.__new__(metacls, name, bases,
+                            attrs)
+
+        # Get dependencies
+        setattr(view_cls, '_dependencies', dependencies)
+        for app_label, model_name, field_name in deferred_projections:
+            model_spec = (app_label, model_name.lower())
+
+            _DEFERRED_PROJECTIONS[model_spec][view_cls].append(field_name)
+            _realise_projections(app_label, model_name)
+
+        return view_cls
+class View(models.Model, metaclass=ViewMeta):
     """Helper for exposing Postgres views as Django models.
     """
 
-    class ViewMeta(models.base.ModelBase):
-
-        def __new__(metacls, name, bases, attrs):
-            '''Deal with all of the meta attributes, removing any Django does not want
-            '''
-            # Get attributes before Django
-            dependencies = attrs.pop('dependencies', [])
-            projection = attrs.pop('projection', [])
-
-            # Get projection
-            deferred_projections = []
-            for field_name in projection:
-                if isinstance(field_name, models.Field):
-                    attrs[field_name.name] = copy.copy(field_name)
-                elif isinstance(field_name, basestring):
-                    match = FIELD_SPEC_RE.match(field_name)
-                    if not match:
-                        raise TypeError("Unrecognized field specifier: %r" %
-                                        field_name)
-                    deferred_projections.append(match.groups())
-                else:
-                    raise TypeError("Unrecognized field specifier: %r" %
-                                    field_name)
-            view_cls = models.base.ModelBase.__new__(metacls, name, bases,
-                                attrs)
-
-            # Get dependencies
-            setattr(view_cls, '_dependencies', dependencies)
-            for app_label, model_name, field_name in deferred_projections:
-                model_spec = (app_label, model_name.lower())
-
-                _DEFERRED_PROJECTIONS[model_spec][view_cls].append(field_name)
-                _realise_projections(app_label, model_name)
-
-            return view_cls
 
     __metaclass__ = ViewMeta
 
